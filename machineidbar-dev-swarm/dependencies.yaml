@@ -1,0 +1,19 @@
+# dependencies.yaml — Swarm Skill startup dependency check
+#
+# Agent reads this file in SKILL.md Workflow Step 0 (pre-flight).
+# Each entry is checked. Results are reported to the user, who decides go/no-go.
+
+skills: []
+
+tools:
+  - name: python
+    required: true
+    purpose: Run the MachineIdBar source and setup scripts
+
+  - name: pyinstaller
+    required: false
+    purpose: Build standalone exe — build & test step is skipped if unavailable
+
+  - name: git
+    required: false
+    purpose: Version control and collaboration — not needed for a single dev cycle
