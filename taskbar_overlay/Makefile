@@ -56,7 +56,7 @@ else ifeq ($(CC),g++)
              -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX \
              -I.
   # Build as CONSOLE subsystem — app frees console when running as GUI
-  LDFLAGS = -mconsole -municode
+  LDFLAGS = -mconsole -municode -static
   LIBS    = -luser32 -lgdi32 -lshell32 -lcomctl32 -lshcore -lws2_32 -lpdh -lole32
   CXX = g++
   # Compile .rc to .o with windres
@@ -68,7 +68,7 @@ else
 endif
 
 # === Build rules =============================================================
-.PHONY: all clean run
+.PHONY: all clean run dist
 
 all: $(TARGET)
 
@@ -90,3 +90,29 @@ run: $(TARGET)
 
 clean:
 	rm -f $(TARGET) *.obj *.o *.pdb *.ilk *.exp *.lib *.res app_res.o 2>/dev/null
+	rm -rf dist
+
+# === MSI (WiX v4+) ============================================================
+# Requires the `wix` CLI on PATH and DOTNET_ROOT set (WiX v4+ needs .NET 8).
+#
+#   make dist       — builds exe (if needed), then builds dist/MachineIdBar.msi
+#   make msi        — builds just the MSI (assumes exe is already built)
+#
+# Default to scoop-installed WiX if wix isn't on PATH
+WIX      ?= $(USERPROFILE)/scoop/apps/wixtoolset/current/wix.exe
+# Default to user-installed .NET 8 SDK (dotnet-install script)
+DOTNET_ROOT ?= $(USERPROFILE)/.dotnet
+WXS       = MachineIdBar.wxs
+MSI       = dist/MachineIdBar.msi
+WIXFLAGS  = -arch x64
+
+# Export DOTNET_ROOT so the wix CLI can find the .NET runtime
+export DOTNET_ROOT
+
+$(MSI): $(WXS) $(TARGET)
+	mkdir -p dist
+	$(WIX) build $(WXS) $(WIXFLAGS) -o $(MSI)
+
+msi: $(MSI)
+
+dist: $(TARGET) $(MSI)

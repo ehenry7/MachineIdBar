@@ -6,47 +6,65 @@
            Language="1033"
            Codepage="1252"
            InstallerVersion="500"
-           Scope="perUser">
+           Scope="perMachine">
 
     <SummaryInformation Description="Machine ID Bar - Taskbar overlay for RDP session identification" />
 
     <Media Id="1" Cabinet="MachineIdBar.cab" EmbedCab="yes" />
 
-    <StandardDirectory Id="LocalAppDataFolder">
+    <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLDIR" Name="MachineIdBar">
         <Component Id="MainExe" Guid="a1b2c3d4-e5f6-7890-abcd-ef1234567890">
           <File Id="MachineIdBarExe" Source="MachineIdBar.exe" KeyPath="yes" />
-          <Shortcut Id="StartMenuShortcut"
-                    Name="Machine ID Bar"
-                    Directory="ProgramMenuFolder"
-                    WorkingDirectory="INSTALLDIR"
-                    Advertise="no" />
-          <Shortcut Id="StartupShortcut"
-                    Name="Machine ID Bar"
-                    Directory="StartupFolder"
-                    WorkingDirectory="INSTALLDIR"
-                    Advertise="no" />
           <RemoveFolder Id="RemoveInstallDir" Directory="INSTALLDIR" On="uninstall" />
-          <RemoveFolder Id="RemoveStartMenuShortcut" Directory="ProgramMenuFolder" On="uninstall" />
         </Component>
       </Directory>
     </StandardDirectory>
-
-    <StandardDirectory Id="ProgramMenuFolder" />
-    <StandardDirectory Id="StartupFolder" />
 
     <Feature Id="Complete" Title="Machine ID Bar" Level="1">
       <ComponentRef Id="MainExe" />
     </Feature>
 
-    <!-- Launch app after install -->
-    <CustomAction Id="LaunchApp"
-                  Directory="INSTALLDIR"
-                  Execute="immediate"
-                  Return="asyncNoWait"
-                  ExeCommand="[INSTALLDIR]MachineIdBar.exe --gui" />
+    <!--
+      Impersonated deferred custom actions.
+      perMachine MSI runs as SYSTEM, but -i/-u need the current user's
+      %LOCALAPPDATA% and %APPDATA%, so we impersonate.
+
+      Pattern: Type 51 (SetProperty) stores the exe path in a property
+      during the immediate phase, then Type 50 (deferred) executes it
+      with ExeCommand arguments.
+    -->
+
+    <!-- Install: MachineIdBar.exe -i -->
+    <CustomAction Id="SetRunInstall"
+                  Property="RunInstallDeferred"
+                  Value="[INSTALLDIR]MachineIdBar.exe" />
+    <CustomAction Id="RunInstallDeferred"
+                  Property="RunInstallDeferred"
+                  ExeCommand="-i -n"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="check" />
+
+    <!-- Uninstall: MachineIdBar.exe -u -->
+    <CustomAction Id="SetRunUninstall"
+                  Property="RunUninstallDeferred"
+                  Value="[INSTALLDIR]MachineIdBar.exe" />
+    <CustomAction Id="RunUninstallDeferred"
+                  Property="RunUninstallDeferred"
+                  ExeCommand="-u -n"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+
     <InstallExecuteSequence>
-      <Custom Action="LaunchApp" After="InstallFinalize" Condition="NOT Installed" />
+      <!-- Install: set property, then run after files are in place -->
+      <Custom Action="SetRunInstall" After="InstallInitialize" Condition="NOT Installed" />
+      <Custom Action="RunInstallDeferred" After="InstallFiles" Condition="NOT Installed" />
+
+      <!-- Uninstall: set property, then run before files are removed (exe must still exist) -->
+      <Custom Action="SetRunUninstall" After="InstallInitialize" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="RunUninstallDeferred" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

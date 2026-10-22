@@ -12,6 +12,26 @@ build/
 
 # Build outputs
 *.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.msi
+*.wixpdb
+*.cab
+
+# Logs and debug output
+*.log
+*.txt
+!prd/**/*.md
+
+# Temp/test artifacts
+*.png
+*.zip
+*.ini
+nul
 
 # Virtual environments
 venv/

@@ -267,7 +267,7 @@ static std::wstring GetInstallDir()
     return std::wstring(localAppData) + L"\\MachineIdBar";
 }
 
-static bool DoInstall()
+static bool DoInstall(bool noArp)
 {
     wchar_t exePath[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
@@ -342,26 +342,30 @@ static bool DoInstall()
     CoUninitialize();
 
     // Register in Windows Settings -> Apps (Add/Remove Programs)
-    std::wstring uninstallKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MachineIdBar";
-    HKEY hKey;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, uninstallKey.c_str(), 0, nullptr, 0,
-        KEY_SET_VALUE, nullptr, &hKey, nullptr) == ERROR_SUCCESS)
+    // Skipped when -n is used (e.g. MSI handles ARP registration itself)
+    if (!noArp)
     {
-        std::wstring displayName = L"Machine ID Bar";
-        std::wstring uninstallStr = exeDst + L" --uninstall";
-        std::wstring publisher = L"MachineIdBar";
-        RegSetValueExW(hKey, L"DisplayName", 0, REG_SZ,
-            (const BYTE*)displayName.c_str(), (DWORD)((displayName.size() + 1) * sizeof(wchar_t)));
-        RegSetValueExW(hKey, L"UninstallString", 0, REG_SZ,
-            (const BYTE*)uninstallStr.c_str(), (DWORD)((uninstallStr.size() + 1) * sizeof(wchar_t)));
-        RegSetValueExW(hKey, L"DisplayIcon", 0, REG_SZ,
-            (const BYTE*)exeDst.c_str(), (DWORD)((exeDst.size() + 1) * sizeof(wchar_t)));
-        RegSetValueExW(hKey, L"Publisher", 0, REG_SZ,
-            (const BYTE*)publisher.c_str(), (DWORD)((publisher.size() + 1) * sizeof(wchar_t)));
-        DWORD noModify = 1, noRepair = 1;
-        RegSetValueExW(hKey, L"NoModify", 0, REG_DWORD, (const BYTE*)&noModify, sizeof(DWORD));
-        RegSetValueExW(hKey, L"NoRepair", 0, REG_DWORD, (const BYTE*)&noRepair, sizeof(DWORD));
-        RegCloseKey(hKey);
+        std::wstring uninstallKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MachineIdBar";
+        HKEY hKey;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, uninstallKey.c_str(), 0, nullptr, 0,
+            KEY_SET_VALUE, nullptr, &hKey, nullptr) == ERROR_SUCCESS)
+        {
+            std::wstring displayName = L"Machine ID Bar";
+            std::wstring uninstallStr = exeDst + L" --uninstall";
+            std::wstring publisher = L"MachineIdBar";
+            RegSetValueExW(hKey, L"DisplayName", 0, REG_SZ,
+                (const BYTE*)displayName.c_str(), (DWORD)((displayName.size() + 1) * sizeof(wchar_t)));
+            RegSetValueExW(hKey, L"UninstallString", 0, REG_SZ,
+                (const BYTE*)uninstallStr.c_str(), (DWORD)((uninstallStr.size() + 1) * sizeof(wchar_t)));
+            RegSetValueExW(hKey, L"DisplayIcon", 0, REG_SZ,
+                (const BYTE*)exeDst.c_str(), (DWORD)((exeDst.size() + 1) * sizeof(wchar_t)));
+            RegSetValueExW(hKey, L"Publisher", 0, REG_SZ,
+                (const BYTE*)publisher.c_str(), (DWORD)((publisher.size() + 1) * sizeof(wchar_t)));
+            DWORD noModify = 1, noRepair = 1;
+            RegSetValueExW(hKey, L"NoModify", 0, REG_DWORD, (const BYTE*)&noModify, sizeof(DWORD));
+            RegSetValueExW(hKey, L"NoRepair", 0, REG_DWORD, (const BYTE*)&noRepair, sizeof(DWORD));
+            RegCloseKey(hKey);
+        }
     }
 
     wprintf(L"Machine ID Bar installed.\n");
@@ -381,7 +385,7 @@ static bool DoInstall()
 // Uninstall — remove startup shortcut and install directory
 // ============================================================================
 
-static bool DoUninstall()
+static bool DoUninstall(bool noArp)
 {
     // Kill running instance
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -432,9 +436,12 @@ static bool DoUninstall()
         wprintf(L"  No install directory found.\n");
     }
 
-    // Remove the Add/Remove Programs registry entry
-    RegDeleteKeyW(HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MachineIdBar");
+    // Remove the Add/Remove Programs registry entry (skipped with -n)
+    if (!noArp)
+    {
+        RegDeleteKeyW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MachineIdBar");
+    }
 
     wprintf(L"Machine ID Bar uninstalled.\n");
     wprintf(L"  Registry settings (HKCU\\Software\\MachineIdBar) left intact.\n");
@@ -455,6 +462,8 @@ static void ShowHelp()
     wprintf(L"  MachineIdBar.exe -i  / --install   Install as startup app\n");
     wprintf(L"  MachineIdBar.exe -u  / --uninstall Remove from startup\n");
     wprintf(L"  MachineIdBar.exe -h  / --help      Show this help\n");
+    wprintf(L"  MachineIdBar.exe -n  / --no-arp    Skip Settings->Apps registration\n");
+    wprintf(L"                                      (use with -i or -u)\n");
     wprintf(L"  MachineIdBar.exe -l  / --label \"X\" Override label\n");
     wprintf(L"  MachineIdBar.exe -c  / --fg \"#fff\" Override font color\n");
     wprintf(L"\n");
@@ -910,41 +919,51 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(cmdLine.c_str(), &argc);
 
-    // Check for --install/-i, --uninstall/-u, --help/-h, --gui
+    // Check for --install/-i, --uninstall/-u, --help/-h, --gui, --no-arp/-n
+    // Two-pass: first scan all flags, then dispatch install/uninstall/help.
+    // This ensures -n is seen even when it appears after -i or -u.
     bool guiMode = false;
+    bool noArp = false;
+    int action = 0;  // 0=none, 1=install, 2=uninstall, 3=help
     if (argv)
     {
+        // Pass 1: collect all flags
         for (int i = 1; i < argc; i++)
         {
             std::wstring arg = argv[i];
             if (arg == L"--gui")
-            {
                 guiMode = true;
-                continue;
-            }
+            else if (arg == L"--no-arp" || arg == L"-n")
+                noArp = true;
+        }
+        // Pass 2: dispatch first action found
+        for (int i = 1; i < argc && action == 0; i++)
+        {
+            std::wstring arg = argv[i];
             if (arg == L"--install" || arg == L"-i")
-            {
-                LocalFree(argv);
-                DoInstall();
-                fflush(stdout);
-                return 0;
-            }
-            if (arg == L"--uninstall" || arg == L"-u")
-            {
-                LocalFree(argv);
-                DoUninstall();
-                fflush(stdout);
-                return 0;
-            }
-            if (arg == L"--help" || arg == L"-h")
-            {
-                LocalFree(argv);
-                ShowHelp();
-                fflush(stdout);
-                return 0;
-            }
+                action = 1;
+            else if (arg == L"--uninstall" || arg == L"-u")
+                action = 2;
+            else if (arg == L"--help" || arg == L"-h")
+                action = 3;
         }
         LocalFree(argv);
+
+        switch (action)
+        {
+        case 1:
+            DoInstall(noArp);
+            fflush(stdout);
+            return 0;
+        case 2:
+            DoUninstall(noArp);
+            fflush(stdout);
+            return 0;
+        case 3:
+            ShowHelp();
+            fflush(stdout);
+            return 0;
+        }
     }
 
     // If not in --gui mode, check singleton first, then relaunch detached
