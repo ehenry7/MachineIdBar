@@ -158,7 +158,14 @@ public:
     void SetStyle(const OverlayStyle& style);
 
     // Set taskbar position (left or right).
-    void SetPosition(TaskbarPosition pos) { m_position = pos; }
+    void SetPosition(TaskbarPosition pos)
+    {
+        m_position = pos;
+        // Apply immediately — the timer only repositions on geometry changes,
+        // so it won't pick up a position change by itself.
+        if (m_hwnd)
+            AdjustWindowPos();
+    }
 
     // Get the overlay window handle.
     HWND GetHwnd() const { return m_hwnd; }
@@ -228,6 +235,10 @@ private:
     int          m_drag_start_y = 0;
     int          m_win_x        = 0;   // current position (parent-relative)
     int          m_win_y        = 0;
+
+    // --- Change detection for OnTimer repositioning ---
+    RECT m_last_taskbar_rect = {};   // taskbar rect at last AdjustWindowPos
+    RECT m_last_anchor_rect  = {};   // tray-notify (Win11) / task-list (Classic) rect
 
     // --- Registered message ---
     UINT m_wm_taskbar_created   = 0;

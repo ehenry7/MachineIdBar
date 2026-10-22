@@ -35,6 +35,12 @@ static void DebugLog(const wchar_t* fmt, ...)
     fclose(f);
 }
 
+static bool RectEqual(const RECT& a, const RECT& b)
+{
+    return a.left == b.left && a.top == b.top &&
+           a.right == b.right && a.bottom == b.bottom;
+}
+
 MachineIdBar::MachineIdBar()
 {
     s_instance = this;
@@ -365,12 +371,16 @@ HWND MachineIdBar::GetParentHwnd()
 
 void MachineIdBar::RestoreTaskbar()
 {
-    if (m_taskbar_type == TaskbarType::Classic && m_h_min)
+    if (m_taskbar_type == TaskbarType::Classic && m_h_min && m_h_bar)
     {
-        // Restore the minimized-window area to its original size
+        // Restore the minimized-window area to its original size.
+        // m_min_original_rect holds screen coordinates (GetWindowRect), but
+        // MoveWindow expects coordinates relative to the parent window.
         int w = m_min_original_rect.right - m_min_original_rect.left;
         int h = m_min_original_rect.bottom - m_min_original_rect.top;
-        ::MoveWindow(m_h_min, m_min_original_rect.left, m_min_original_rect.top, w, h, TRUE);
+        POINT pt = { m_min_original_rect.left, m_min_original_rect.top };
+        ScreenToClient(m_h_bar, &pt);
+        ::MoveWindow(m_h_min, pt.x, pt.y, w, h, TRUE);
     }
     // Win11: nothing to restore (we didn't resize any child)
     // Wine: nothing to restore
@@ -409,13 +419,16 @@ void MachineIdBar::AdjustWindowPos()
 
             if (m_h_min)
             {
-                // Shrink the minimized-window area to make room
+                // Shrink the minimized-window area to make room.
+                // Base the new width on the ORIGINAL size saved in
+                // InitTaskbarWnd — using the current size would shrink the
+                // area by wnd_w again on every call.
                 RECT rcMin;
                 GetWindowRect(m_h_min, &rcMin);
                 POINT pt = { rcMin.left, rcMin.top };
                 ScreenToClient(m_h_bar, &pt);
 
-                int min_w = (rcMin.right - rcMin.left) - wnd_w - 4;
+                int min_w = (m_min_original_rect.right - m_min_original_rect.left) - wnd_w - 4;
                 if (min_w < 10) min_w = 10;
                 int min_h = rcMin.bottom - rcMin.top;
                 ::MoveWindow(m_h_min, pt.x, pt.y, min_w, min_h, TRUE);
@@ -437,12 +450,14 @@ void MachineIdBar::AdjustWindowPos()
             int y = 0;
             if (m_h_min)
             {
+                // Same as above: shrink from the ORIGINAL height, not the
+                // current one, so repeated calls don't compound.
                 RECT rcMin;
                 GetWindowRect(m_h_min, &rcMin);
                 POINT pt = { rcMin.left, rcMin.top };
                 ScreenToClient(m_h_bar, &pt);
 
-                int min_h = (rcMin.bottom - rcMin.top) - wnd_h - 4;
+                int min_h = (m_min_original_rect.bottom - m_min_original_rect.top) - wnd_h - 4;
                 if (min_h < 10) min_h = 10;
                 int min_w = rcMin.right - rcMin.left;
                 ::MoveWindow(m_h_min, pt.x, pt.y, min_w, min_h, TRUE);
@@ -616,9 +631,28 @@ void MachineIdBar::OnTimer()
     // Re-assert visibility (matching Python's force_visible in check_resolution)
     ForceVisible();
 
-    // Re-check positioning (taskbar may have been resized)
-    if (m_embedded)
+    // Re-check positioning only when the taskbar geometry actually changed
+    // (RDP reconnect, moved/resized taskbar or its child areas). Re-asserting
+    // every second would undo a user drag within a second. WM_DISPLAYCHANGE
+    // only reaches top-level windows, so this child window has to poll.
+    if (!m_embedded || m_dragging)
+        return;
+
+    RECT rc = { 0, 0, 0, 0 };
+    RECT rcAnchor = { 0, 0, 0, 0 };
+    if (m_h_taskbar)
+        GetWindowRect(m_h_taskbar, &rc);
+    if (m_taskbar_type == TaskbarType::Win11 && m_h_notify)
+        GetWindowRect(m_h_notify, &rcAnchor);
+    else if (m_taskbar_type == TaskbarType::Classic && m_h_min)
+        GetWindowRect(m_h_min, &rcAnchor);
+
+    if (!RectEqual(rc, m_last_taskbar_rect) || !RectEqual(rcAnchor, m_last_anchor_rect))
+    {
+        m_last_taskbar_rect = rc;
+        m_last_anchor_rect = rcAnchor;
         AdjustWindowPos();
+    }
 }
 
 // ============================================================================
@@ -752,23 +786,26 @@ void MachineIdBar::ForceVisible()
 
 int MachineIdBar::GetDPI()
 {
+    typedef HRESULT (WINAPI *GetDpiForMonitorFn)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*);
+
+    // Resolve shcore.dll once and keep it for the process lifetime —
+    // GetDPI runs every second via the timer, and loading/freeing the
+    // DLL on each call is wasteful.
+    static HMODULE hShcore = LoadLibrary(L"shcore.dll");
+    static GetDpiForMonitorFn fnGetDpi = hShcore
+        ? reinterpret_cast<GetDpiForMonitorFn>(
+            reinterpret_cast<void*>(GetProcAddress(hShcore, "GetDpiForMonitor")))
+        : nullptr;
+
     // Try per-monitor DPI
-    HMONITOR hMon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
-    if (hMon)
+    if (fnGetDpi)
     {
-        UINT dpiX = 96, dpiY = 96;
-        HMODULE hShcore = LoadLibrary(L"shcore.dll");
-        if (hShcore)
+        HMONITOR hMon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+        if (hMon)
         {
-            typedef HRESULT (WINAPI *GetDpiForMonitorFn)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*);
-            auto fnGetDpi = reinterpret_cast<GetDpiForMonitorFn>(
-                reinterpret_cast<void*>(GetProcAddress(hShcore, "GetDpiForMonitor")));
-            if (fnGetDpi && fnGetDpi(hMon, MDT_EFFECTIVE_DPI, &dpiX, &dpiY) == S_OK)
-            {
-                FreeLibrary(hShcore);
+            UINT dpiX = 96, dpiY = 96;
+            if (fnGetDpi(hMon, MDT_EFFECTIVE_DPI, &dpiX, &dpiY) == S_OK)
                 return (int)dpiX;
-            }
-            FreeLibrary(hShcore);
         }
     }
     // Fallback: system DPI
@@ -835,21 +872,6 @@ LRESULT CALLBACK MachineIdBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case WM_RBUTTONUP:
         if (self)
             self->OnRButtonUp(LOWORD(lParam), HIWORD(lParam));
-        return 0;
-
-    case WM_COMMAND:
-        if (self)
-        {
-            switch (LOWORD(wParam))
-            {
-            case 1:  // Refresh
-                self->Reembed();
-                break;
-            case 2:  // Exit
-                PostQuitMessage(0);
-                break;
-            }
-        }
         return 0;
 
     case WM_DISPLAYCHANGE:

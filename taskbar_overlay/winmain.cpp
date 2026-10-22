@@ -89,10 +89,6 @@ static void WinMainLog(const wchar_t* fmt, ...)
     fclose(f);
 }
 
-// Console output — since we build as CONSOLE subsystem, stdout works directly
-#define ConsolePrint wprintf
-
-
 // ============================================================================
 // CLI argument parsing
 // ============================================================================
@@ -100,7 +96,6 @@ static void WinMainLog(const wchar_t* fmt, ...)
 struct CliArgs
 {
     std::wstring label = L"Secure PC";
-    std::wstring bg    = L"#0078d4";
     std::wstring fg    = L"white";
 };
 
@@ -108,7 +103,7 @@ static bool HasCliArgs(const std::wstring& cmdLine)
 {
     if (cmdLine.empty())
         return false;
-    // Check for --label/-l, --fg/-c, --bg
+    // Check for --label/-l, --fg/-c
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(cmdLine.c_str(), &argc);
     if (!argv) return false;
@@ -116,7 +111,7 @@ static bool HasCliArgs(const std::wstring& cmdLine)
     for (int i = 1; i < argc; i++)
     {
         std::wstring a = argv[i];
-        if (a == L"--label" || a == L"-l" || a == L"--fg" || a == L"-c" || a == L"--bg")
+        if (a == L"--label" || a == L"-l" || a == L"--fg" || a == L"-c")
         {
             found = true;
             break;
@@ -153,8 +148,6 @@ static CliArgs ParseArgs(const std::wstring& cmdLine)
 
         if (key == L"--label" || key == L"-l")
             args.label = value;
-        else if (key == L"--bg")
-            args.bg = value;
         else if (key == L"--fg" || key == L"-c")
             args.fg = value;
     }
@@ -668,6 +661,7 @@ static void ShowTrayMenu(HWND hwnd)
 
     // Font color submenu — each item gets a colored square bitmap
     HMENU hColorMenu = CreatePopupMenu();
+    HBITMAP colorBitmaps[COLOR_PRESET_COUNT] = {};
     for (int i = 0; i < COLOR_PRESET_COUNT; i++)
     {
         AppendMenuW(hColorMenu,
@@ -696,6 +690,7 @@ static void ShowTrayMenu(HWND hwnd)
         DeleteDC(hdcMem);
         ReleaseDC(nullptr, hdcScreen);
 
+        colorBitmaps[i] = hBmp;
         SetMenuItemBitmaps(hColorMenu, i, MF_BYPOSITION, hBmp, hBmp);
     }
     AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hColorMenu, L"Font color");
@@ -721,10 +716,17 @@ static void ShowTrayMenu(HWND hwnd)
     GetCursorPos(&pt);
     SetForegroundWindow(hwnd);
     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
+    // Classic tray-menu fix: let the menu dismiss when clicking elsewhere
+    PostMessage(hwnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
     DestroyMenu(hColorMenu);
     DestroyMenu(hPosMenu);
     DestroyMenu(hFontMenu);
+
+    // DestroyMenu doesn't free menu item bitmaps
+    for (int i = 0; i < COLOR_PRESET_COUNT; i++)
+        if (colorBitmaps[i])
+            DeleteObject(colorBitmaps[i]);
 }
 
 static HWND CreateHiddenWindow(HINSTANCE hInstance)
