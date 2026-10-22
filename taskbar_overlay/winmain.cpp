@@ -2,11 +2,11 @@
 // Entry point for the Machine ID Bar taskbar overlay.
 //
 // Usage:
-//   taskbar_overlay.exe                  — run the overlay (settings from registry)
-//   taskbar_overlay.exe --install / -i   — install as startup app
-//   taskbar_overlay.exe --uninstall / -u — remove from startup
-//   taskbar_overlay.exe --help / -h      — show help
-//   taskbar_overlay.exe --label "X" --fg "#ffffff"  — override settings
+//   MachineIdBar.exe                  — run the overlay (settings from registry)
+//   MachineIdBar.exe --install / -i   — install as startup app
+//   MachineIdBar.exe --uninstall / -u — remove from startup
+//   MachineIdBar.exe --help / -h      — show help
+//   MachineIdBar.exe --label "X" --fg "#ffffff"  — override settings
 //
 // Settings (label, color, font, position) are stored in the registry
 // and can be changed via the tray icon right-click menu.
@@ -17,7 +17,7 @@
 // Include winsock2.h BEFORE windows.h to avoid redefinition warnings
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include "taskbar_overlay.h"
+#include "MachineIdBar.h"
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <shlobj.h>
@@ -35,7 +35,7 @@
 static HINSTANCE      g_hInstance    = nullptr;
 static HWND           g_hHiddenWnd   = nullptr;
 static NOTIFYICONDATA g_nid          = {};
-static TaskbarOverlay* g_overlay     = nullptr;
+static MachineIdBar* g_overlay     = nullptr;
 static OverlaySettings g_settings;
 
 // Font color presets
@@ -70,7 +70,7 @@ static const int COLOR_PRESET_COUNT = sizeof(COLOR_PRESETS) / sizeof(COLOR_PRESE
 
 // Tray icon callback
 #define MY_WM_NOTIFYICON (WM_USER + 1005)
-#define MY_WM_SHOW_MENU  (WM_USER + 1006)
+#define MIDBAR_WM_SHOW_MENU  (WM_USER + 1006)
 
 // ============================================================================
 // Logging
@@ -79,7 +79,7 @@ static const int COLOR_PRESET_COUNT = sizeof(COLOR_PRESETS) / sizeof(COLOR_PRESE
 static void WinMainLog(const wchar_t* fmt, ...)
 {
     FILE* f = nullptr;
-    if (_wfopen_s(&f, L"taskbar_overlay_debug.log", L"a") != 0 || !f)
+    if (_wfopen_s(&f, L"MachineIdBar_debug.log", L"a") != 0 || !f)
         return;
     va_list args;
     va_start(args, fmt);
@@ -280,7 +280,7 @@ static bool DoInstall()
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
 
     std::wstring installDir = GetInstallDir();
-    std::wstring exeDst = installDir + L"\\taskbar_overlay.exe";
+    std::wstring exeDst = installDir + L"\\MachineIdBar.exe";
     std::wstring shortcutPath = GetShortcutPath();
 
     // Kill any running instance
@@ -292,7 +292,7 @@ static bool DoInstall()
         if (Process32FirstW(hSnap, &pe))
         {
             do {
-                if (_wcsicmp(pe.szExeFile, L"taskbar_overlay.exe") == 0 &&
+                if (_wcsicmp(pe.szExeFile, L"MachineIdBar.exe") == 0 &&
                     pe.th32ProcessID != GetCurrentProcessId())
                 {
                     HANDLE hProc = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pe.th32ProcessID);
@@ -375,7 +375,7 @@ static bool DoInstall()
     wprintf(L"  Installed:  %ls\n", exeDst.c_str());
     wprintf(L"  Startup:    %ls\n", shortcutPath.c_str());
     wprintf(L"  The app will auto-launch on every login.\n");
-    wprintf(L"  Uninstall via Settings -> Apps or: taskbar_overlay.exe --uninstall\n");
+    wprintf(L"  Uninstall via Settings -> Apps or: MachineIdBar.exe --uninstall\n");
 
     // Launch the installed copy
     ShellExecuteW(nullptr, L"open", exeDst.c_str(), nullptr, installDir.c_str(), SW_SHOWNORMAL);
@@ -399,7 +399,7 @@ static bool DoUninstall()
         if (Process32FirstW(hSnap, &pe))
         {
             do {
-                if (_wcsicmp(pe.szExeFile, L"taskbar_overlay.exe") == 0 &&
+                if (_wcsicmp(pe.szExeFile, L"MachineIdBar.exe") == 0 &&
                     pe.th32ProcessID != GetCurrentProcessId())
                 {
                     HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
@@ -429,7 +429,7 @@ static bool DoUninstall()
     attr = GetFileAttributesW(installDir.c_str());
     if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
     {
-        std::wstring exeDst = installDir + L"\\taskbar_overlay.exe";
+        std::wstring exeDst = installDir + L"\\MachineIdBar.exe";
         DeleteFileW(exeDst.c_str());
         RemoveDirectoryW(installDir.c_str());
         wprintf(L"  Removed install directory: %ls\n", installDir.c_str());
@@ -458,12 +458,12 @@ static void ShowHelp()
     wprintf(L"Machine ID Bar — taskbar overlay for RDP session identification\n");
     wprintf(L"\n");
     wprintf(L"Usage:\n");
-    wprintf(L"  taskbar_overlay.exe                   Run the overlay\n");
-    wprintf(L"  taskbar_overlay.exe -i  / --install   Install as startup app\n");
-    wprintf(L"  taskbar_overlay.exe -u  / --uninstall Remove from startup\n");
-    wprintf(L"  taskbar_overlay.exe -h  / --help      Show this help\n");
-    wprintf(L"  taskbar_overlay.exe -l  / --label \"X\" Override label\n");
-    wprintf(L"  taskbar_overlay.exe -c  / --fg \"#fff\" Override font color\n");
+    wprintf(L"  MachineIdBar.exe                   Run the overlay\n");
+    wprintf(L"  MachineIdBar.exe -i  / --install   Install as startup app\n");
+    wprintf(L"  MachineIdBar.exe -u  / --uninstall Remove from startup\n");
+    wprintf(L"  MachineIdBar.exe -h  / --help      Show this help\n");
+    wprintf(L"  MachineIdBar.exe -l  / --label \"X\" Override label\n");
+    wprintf(L"  MachineIdBar.exe -c  / --fg \"#fff\" Override font color\n");
     wprintf(L"\n");
     wprintf(L"Settings are stored in registry (HKCU\\Software\\MachineIdBar)\n");
     wprintf(L"and can be changed via the tray icon right-click menu.\n");
@@ -743,7 +743,7 @@ static HWND CreateHiddenWindow(HINSTANCE hInstance)
         }
 
         // Right-click on the overlay label posts this to show the same menu
-        if (msg == MY_WM_SHOW_MENU)
+        if (msg == MIDBAR_WM_SHOW_MENU)
         {
             ShowTrayMenu(hwnd);
             return 0;
@@ -842,10 +842,10 @@ static HWND CreateHiddenWindow(HINSTANCE hInstance)
         return DefWindowProc(hwnd, msg, wParam, lParam);
     };
     wc.hInstance     = hInstance;
-    wc.lpszClassName = L"TaskbarOverlayHidden";
+    wc.lpszClassName = L"MachineIdBarHidden";
 
     RegisterClassEx(&wc);
-    return CreateWindowEx(0, L"TaskbarOverlayHidden", L"", 0,
+    return CreateWindowEx(0, L"MachineIdBarHidden", L"", 0,
         0, 0, 0, 0, nullptr, nullptr, hInstance, nullptr);
 }
 
@@ -978,7 +978,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
     WinMainLog(L"Tray icon added");
 
     // Create and embed the taskbar overlay
-    TaskbarOverlay overlay;
+    MachineIdBar overlay;
     g_overlay = &overlay;
 
     OverlayStyle style;

@@ -1,4 +1,4 @@
-// app.rc — resource file for taskbar_overlay
+// app.rc — resource file for MachineIdBar
 // Embeds the application icon (numeric ID 1 = light theme, ID 2 = dark theme)
 1 ICON "app.ico"
 2 ICON "app_dark.ico"

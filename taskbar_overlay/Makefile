@@ -1,4 +1,4 @@
-# Makefile for TaskbarOverlay
+# Makefile for MachineIdBar
 # Extracted from TrafficMonitor's taskbar window code — pure Win32, no MFC.
 #
 # Supports two compilers:
@@ -7,7 +7,7 @@
 #   make CC=g++    — force MinGW
 #
 # Targets:
-#   make          — builds taskbar_overlay.exe
+#   make          — builds MachineIdBar.exe
 #   make clean    — removes build artifacts
 #   make run      — builds and runs
 
@@ -31,9 +31,9 @@ else ifeq ($(CC),cc)
 endif
 
 # === Output ==================================================================
-TARGET = taskbar_overlay.exe
-SRCS   = taskbar_overlay.cpp winmain.cpp
-HDRS   = taskbar_overlay.h
+TARGET = MachineIdBar.exe
+SRCS   = MachineIdBar.cpp winmain.cpp
+HDRS   = MachineIdBar.h
 RC     = app.rc
 
 # === MSVC (cl.exe) configuration =============================================
