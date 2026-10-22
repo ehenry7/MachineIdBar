@@ -1,0 +1,52 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Machine ID Bar"
+           Manufacturer="MachineIdBar"
+           Version="1.0.0.0"
+           UpgradeCode="b8f3a2e1-7c4d-4a9e-b6f1-3e5a7c9d2b8e"
+           Language="1033"
+           Codepage="1252"
+           InstallerVersion="500"
+           Scope="perUser">
+
+    <SummaryInformation Description="Machine ID Bar - Taskbar overlay for RDP session identification" />
+
+    <Media Id="1" Cabinet="MachineIdBar.cab" EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLDIR" Name="MachineIdBar">
+        <Component Id="MainExe" Guid="a1b2c3d4-e5f6-7890-abcd-ef1234567890">
+          <File Id="MachineIdBarExe" Source="MachineIdBar.exe" KeyPath="yes" />
+          <Shortcut Id="StartMenuShortcut"
+                    Name="Machine ID Bar"
+                    Directory="ProgramMenuFolder"
+                    WorkingDirectory="INSTALLDIR"
+                    Advertise="no" />
+          <Shortcut Id="StartupShortcut"
+                    Name="Machine ID Bar"
+                    Directory="StartupFolder"
+                    WorkingDirectory="INSTALLDIR"
+                    Advertise="no" />
+          <RemoveFolder Id="RemoveInstallDir" Directory="INSTALLDIR" On="uninstall" />
+          <RemoveFolder Id="RemoveStartMenuShortcut" Directory="ProgramMenuFolder" On="uninstall" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="StartupFolder" />
+
+    <Feature Id="Complete" Title="Machine ID Bar" Level="1">
+      <ComponentRef Id="MainExe" />
+    </Feature>
+
+    <!-- Launch app after install -->
+    <CustomAction Id="LaunchApp"
+                  Directory="INSTALLDIR"
+                  Execute="immediate"
+                  Return="asyncNoWait"
+                  ExeCommand="[INSTALLDIR]MachineIdBar.exe --gui" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApp" After="InstallFinalize" Condition="NOT Installed" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>
