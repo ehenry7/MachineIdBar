@@ -42,7 +42,7 @@ ifeq ($(CC),cl)
              /D_UNICODE /DUNICODE /DWIN32 /D_WINDOWS \
              /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX \
              /I.
-  LDFLAGS = /nologo /SUBSYSTEM:WINDOWS /MACHINE:X64
+  LDFLAGS = /nologo /SUBSYSTEM:CONSOLE /MACHINE:X64
   LIBS    = user32.lib gdi32.lib shell32.lib comctl32.lib shcore.lib ws2_32.lib pdh.lib ole32.lib
   CXX = cl
   # Compile .rc to .res with rc.exe
@@ -55,7 +55,8 @@ else ifeq ($(CC),g++)
              -D_UNICODE -DUNICODE -DWIN32 -D_WINDOWS \
              -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX \
              -I.
-  LDFLAGS = -mwindows -municode
+  # Build as CONSOLE subsystem — app frees console when running as GUI
+  LDFLAGS = -mconsole -municode
   LIBS    = -luser32 -lgdi32 -lshell32 -lcomctl32 -lshcore -lws2_32 -lpdh -lole32
   CXX = g++
   # Compile .rc to .o with windres
