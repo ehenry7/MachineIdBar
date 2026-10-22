@@ -10,6 +10,9 @@ build/
 *.manifest
 # Keep .spec files for reproducible builds
 
+# Build outputs
+*.exe
+
 # Virtual environments
 venv/
 .venv/
