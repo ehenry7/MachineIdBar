@@ -23,7 +23,9 @@
 #include <string>
 #include <cstdio>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "ws2_32.lib")
+#endif
 
 // ============================================================================
 // Globals
@@ -101,9 +103,22 @@ static bool HasCliArgs(const std::wstring& cmdLine)
 {
     if (cmdLine.empty())
         return false;
-    return (cmdLine.find(L"--label") != std::wstring::npos) ||
-           (cmdLine.find(L"--bg") != std::wstring::npos) ||
-           (cmdLine.find(L"--fg") != std::wstring::npos);
+    // Check for --label/-l, --fg/-c, --bg
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(cmdLine.c_str(), &argc);
+    if (!argv) return false;
+    bool found = false;
+    for (int i = 1; i < argc; i++)
+    {
+        std::wstring a = argv[i];
+        if (a == L"--label" || a == L"-l" || a == L"--fg" || a == L"-c" || a == L"--bg")
+        {
+            found = true;
+            break;
+        }
+    }
+    LocalFree(argv);
+    return found;
 }
 
 static CliArgs ParseArgs(const std::wstring& cmdLine)
@@ -131,11 +146,11 @@ static CliArgs ParseArgs(const std::wstring& cmdLine)
                 value = argv[++i];
         }
 
-        if (key == L"--label")
+        if (key == L"--label" || key == L"-l")
             args.label = value;
         else if (key == L"--bg")
             args.bg = value;
-        else if (key == L"--fg")
+        else if (key == L"--fg" || key == L"-c")
             args.fg = value;
     }
 
@@ -170,13 +185,7 @@ static COLORREF ParseColor(const std::wstring& s, COLORREF defaultColor)
     return defaultColor;
 }
 
-// Convert COLORREF to "#RRGGBB" string
-static std::wstring ColorToHex(COLORREF c)
-{
-    wchar_t buf[8];
-    swprintf_s(buf, L"#%02x%02x%02x", GetRValue(c), GetGValue(c), GetBValue(c));
-    return std::wstring(buf);
-}
+// (ColorToHex removed — unused)
 
 // ============================================================================
 // Network info
@@ -281,8 +290,13 @@ static bool DoInstall()
                 if (_wcsicmp(pe.szExeFile, L"taskbar_overlay.exe") == 0 &&
                     pe.th32ProcessID != GetCurrentProcessId())
                 {
-                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
-                    if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
+                    HANDLE hProc = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pe.th32ProcessID);
+                    if (hProc)
+                    {
+                        TerminateProcess(hProc, 0);
+                        WaitForSingleObject(hProc, 3000);  // wait for it to fully exit
+                        CloseHandle(hProc);
+                    }
                 }
             } while (Process32NextW(hSnap, &pe));
         }
@@ -292,10 +306,21 @@ static bool DoInstall()
     // Create install directory
     CreateDirectoryW(installDir.c_str(), nullptr);
 
-    // Copy exe
-    if (!CopyFileW(exePath, exeDst.c_str(), FALSE))
+    // Copy exe (retry in case the file is still being released)
+    bool copied = false;
+    for (int attempt = 0; attempt < 5; attempt++)
+    {
+        if (CopyFileW(exePath, exeDst.c_str(), FALSE))
+        {
+            copied = true;
+            break;
+        }
+        Sleep(500);
+    }
+    if (!copied)
     {
         wprintf(L"ERROR: Could not copy to %ls\n", exeDst.c_str());
+        wprintf(L"  Make sure no other instance is running.\n");
         return false;
     }
 
@@ -424,12 +449,12 @@ static void ShowHelp()
     wprintf(L"Machine ID Bar — taskbar overlay for RDP session identification\n");
     wprintf(L"\n");
     wprintf(L"Usage:\n");
-    wprintf(L"  taskbar_overlay.exe                  Run the overlay\n");
-    wprintf(L"  taskbar_overlay.exe --install  / -i  Install as startup app\n");
-    wprintf(L"  taskbar_overlay.exe --uninstall / -u Remove from startup\n");
-    wprintf(L"  taskbar_overlay.exe --help  / -h     Show this help\n");
-    wprintf(L"  taskbar_overlay.exe --label \"X\"      Override label\n");
-    wprintf(L"  taskbar_overlay.exe --fg \"#ffffff\"   Override font color\n");
+    wprintf(L"  taskbar_overlay.exe                   Run the overlay\n");
+    wprintf(L"  taskbar_overlay.exe -i  / --install   Install as startup app\n");
+    wprintf(L"  taskbar_overlay.exe -u  / --uninstall Remove from startup\n");
+    wprintf(L"  taskbar_overlay.exe -h  / --help      Show this help\n");
+    wprintf(L"  taskbar_overlay.exe -l  / --label \"X\" Override label\n");
+    wprintf(L"  taskbar_overlay.exe -c  / --fg \"#fff\" Override font color\n");
     wprintf(L"\n");
     wprintf(L"Settings are stored in registry (HKCU\\Software\\MachineIdBar)\n");
     wprintf(L"and can be changed via the tray icon right-click menu.\n");
@@ -444,7 +469,7 @@ static void ShowHelp()
 
 static std::wstring g_labelInput;
 
-static INT_PTR CALLBACK LabelDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+static INT_PTR CALLBACK LabelDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM /*lParam*/)
 {
     switch (msg)
     {
@@ -862,8 +887,13 @@ static void RemoveTrayIcon()
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
 {
+    (void)pCmdLine;
     g_hInstance = hInstance;
-    std::wstring cmdLine = pCmdLine ? pCmdLine : L"";
+
+    // Use GetCommandLineW() to get the FULL command line (including exe path),
+    // because pCmdLine only contains the arguments without the program name.
+    // CommandLineToArgvW needs the full command line to parse correctly.
+    std::wstring cmdLine = GetCommandLineW();
 
     // Parse for special commands
     int argc = 0;
@@ -878,38 +908,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
             if (arg == L"--install" || arg == L"-i")
             {
                 LocalFree(argv);
-                AllocConsole();
+                if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
                 freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
                 DoInstall();
-                Sleep(2500);
                 return 0;
             }
             if (arg == L"--uninstall" || arg == L"-u")
             {
                 LocalFree(argv);
-                AllocConsole();
+                if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
                 freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
                 DoUninstall();
-                Sleep(2500);
                 return 0;
             }
             if (arg == L"--help" || arg == L"-h")
             {
                 LocalFree(argv);
-                MessageBoxW(nullptr,
-                    L"Machine ID Bar — taskbar overlay for RDP session identification\n\n"
-                    L"Usage:\n"
-                    L"  taskbar_overlay.exe                  Run the overlay\n"
-                    L"  taskbar_overlay.exe --install / -i   Install as startup app\n"
-                    L"  taskbar_overlay.exe --uninstall / -u Remove from startup\n"
-                    L"  taskbar_overlay.exe --help / -h      Show this help\n"
-                    L"  taskbar_overlay.exe --label \"X\"      Override label\n"
-                    L"  taskbar_overlay.exe --fg \"#ffffff\"   Override font color\n\n"
-                    L"Settings are stored in registry and can be changed\n"
-                    L"via the tray icon right-click menu.\n\n"
-                    L"Left/right-click the label to copy to clipboard.\n"
-                    L"Ctrl+click to exit.",
-                    L"Machine ID Bar — Help", MB_OK | MB_ICONINFORMATION);
+                if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+                freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
+                ShowHelp();
                 return 0;
             }
         }

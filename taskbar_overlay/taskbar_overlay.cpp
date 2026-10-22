@@ -11,7 +11,9 @@
 #include <shellscalingapi.h>  // for GetDpiForMonitor
 #include <cstdio>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "pdh.lib")
+#endif
 
 // Custom message: show the tray menu (posted from overlay right-click)
 #define MY_WM_SHOW_MENU (WM_USER + 1006)
@@ -671,7 +673,7 @@ void TaskbarOverlay::OnMouseMove(int x, int y)
     ::MoveWindow(m_hwnd, new_x, new_y, wnd_w, wnd_h, TRUE);
 }
 
-void TaskbarOverlay::OnLButtonUp(int x, int y)
+void TaskbarOverlay::OnLButtonUp(int /*x*/, int /*y*/)
 {
     if (GetCapture() == m_hwnd)
         ReleaseCapture();
@@ -683,7 +685,7 @@ void TaskbarOverlay::OnLButtonUp(int x, int y)
     m_dragging = false;
 }
 
-void TaskbarOverlay::OnRButtonUp(int x, int y)
+void TaskbarOverlay::OnRButtonUp(int /*x*/, int /*y*/)
 {
     // Ctrl+right-click = exit (matching Python)
     if (GetKeyState(VK_CONTROL) & 0x8000)
@@ -758,8 +760,9 @@ int TaskbarOverlay::GetDPI()
         HMODULE hShcore = LoadLibrary(L"shcore.dll");
         if (hShcore)
         {
-            auto fnGetDpi = (HRESULT(*)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*))
-                GetProcAddress(hShcore, "GetDpiForMonitor");
+            typedef HRESULT (WINAPI *GetDpiForMonitorFn)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*);
+            auto fnGetDpi = reinterpret_cast<GetDpiForMonitorFn>(
+                reinterpret_cast<void*>(GetProcAddress(hShcore, "GetDpiForMonitor")));
             if (fnGetDpi && fnGetDpi(hMon, MDT_EFFECTIVE_DPI, &dpiX, &dpiY) == S_OK)
             {
                 FreeLibrary(hShcore);

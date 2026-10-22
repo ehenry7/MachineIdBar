@@ -38,7 +38,7 @@ RC     = app.rc
 
 # === MSVC (cl.exe) configuration =============================================
 ifeq ($(CC),cl)
-  CXXFLAGS = /nologo /EHsc /W3 /O2 /std:c++17 /UTF-8 \
+  CXXFLAGS = /nologo /EHsc /W4 /WX /O2 /std:c++17 /UTF-8 \
              /D_UNICODE /DUNICODE /DWIN32 /D_WINDOWS \
              /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX \
              /I.
@@ -51,7 +51,7 @@ ifeq ($(CC),cl)
 
 # === MinGW (g++) configuration ===============================================
 else ifeq ($(CC),g++)
-  CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -municode \
+  CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Werror -municode \
              -D_UNICODE -DUNICODE -DWIN32 -D_WINDOWS \
              -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX \
              -I.
