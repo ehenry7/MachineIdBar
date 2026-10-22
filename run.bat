@@ -4,4 +4,4 @@
 :: Change the label and color below for each machine.
 cd /d "%~dp0"
 taskkill /F /IM machine_id_bar.exe >nul 2>&1
-dist\machine_id_bar.exe --label="Secure PC" --bg="#d13438"
+start "" dist\machine_id_bar.exe --label="Secure PC" --bg="#d13438"
