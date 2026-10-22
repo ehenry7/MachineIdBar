@@ -908,12 +908,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(cmdLine.c_str(), &argc);
 
-    // Check for --install/-i, --uninstall/-u, --help/-h
+    // Check for --install/-i, --uninstall/-u, --help/-h, --gui
+    bool guiMode = false;
     if (argv)
     {
         for (int i = 1; i < argc; i++)
         {
             std::wstring arg = argv[i];
+            if (arg == L"--gui")
+            {
+                guiMode = true;
+                continue;
+            }
             if (arg == L"--install" || arg == L"-i")
             {
                 LocalFree(argv);
@@ -939,9 +945,69 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
         LocalFree(argv);
     }
 
-    // No CLI command found — switch from console to GUI mode
-    FreeConsole();  // release the console window
-    WinMainLog(L"=== wWinMain started ===");
+    // If not in --gui mode, check singleton first, then relaunch detached
+    if (!guiMode)
+    {
+        // Check if another instance is already running
+        HANDLE hCheck = CreateMutexW(nullptr, TRUE, L"MachineIdBar_Singleton");
+        if (GetLastError() == ERROR_ALREADY_EXISTS)
+        {
+            if (hCheck) CloseHandle(hCheck);
+            wprintf(L"Machine ID Bar is already running.\n");
+            fflush(stdout);
+            return 0;
+        }
+        if (hCheck) CloseHandle(hCheck);
+
+        // If -l/-c args present, load existing settings then override only the specified field
+        if (HasCliArgs(cmdLine))
+        {
+            LoadSettings(g_settings);  // load existing so we don't overwrite other settings
+            CliArgs cliArgs = ParseArgs(cmdLine);
+            // Only override if the arg was actually provided (not default)
+            int argc2 = 0;
+            LPWSTR* argv2 = CommandLineToArgvW(cmdLine.c_str(), &argc2);
+            if (argv2)
+            {
+                for (int j = 1; j < argc2; j++)
+                {
+                    std::wstring a = argv2[j];
+                    if (a == L"--label" || a == L"-l")
+                    {
+                        g_settings.label = cliArgs.label;
+                    }
+                    else if (a == L"--fg" || a == L"-c")
+                    {
+                        g_settings.text_color = ParseColor(cliArgs.fg, RGB(255, 255, 255));
+                    }
+                }
+                LocalFree(argv2);
+            }
+            SaveSettings(g_settings);
+        }
+
+        // Relaunch detached with --gui (no args needed — registry has settings)
+        wchar_t exePath[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+        STARTUPINFOW si = {};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi = {};
+
+        std::wstring cmd = std::wstring(exePath) + L" --gui";
+
+        if (CreateProcessW(nullptr, const_cast<LPWSTR>(cmd.c_str()),
+                           nullptr, nullptr, FALSE,
+                           DETACHED_PROCESS, nullptr, nullptr, &si, &pi))
+        {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+        return 0;  // exit immediately — cmd gets prompt back
+    }
+
+    // --gui mode: run the overlay directly (no console)
+    WinMainLog(L"=== wWinMain started (gui mode) ===");
 
     // Singleton: ensure only one instance runs
     HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"MachineIdBar_Singleton");
@@ -952,25 +1018,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
         return 0;
     }
 
-    if (HasCliArgs(cmdLine))
-    {
-        CliArgs cliArgs = ParseArgs(cmdLine);
-        g_settings.label = cliArgs.label;
-        g_settings.text_color = ParseColor(cliArgs.fg, RGB(255, 255, 255));
-        g_settings.show_hostname = true;
-        g_settings.show_ip = true;
-        g_settings.bold = true;
-        WinMainLog(L"Using CLI args: label=%ls fg=%ls",
-                   cliArgs.label.c_str(), cliArgs.fg.c_str());
-        SaveSettings(g_settings);
-    }
+    // In --gui mode, always load from registry (settings were already saved by the launcher)
+    if (LoadSettings(g_settings))
+        WinMainLog(L"Loaded from registry: label=%ls", g_settings.label.c_str());
     else
-    {
-        if (LoadSettings(g_settings))
-            WinMainLog(L"Loaded from registry: label=%ls", g_settings.label.c_str());
-        else
-            WinMainLog(L"No registry settings, using defaults");
-    }
+        WinMainLog(L"No registry settings, using defaults");
 
     // Create hidden window for tray icon
     g_hHiddenWnd = CreateHiddenWindow(hInstance);
