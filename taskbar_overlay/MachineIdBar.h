@@ -141,9 +141,11 @@ public:
     MachineIdBar();
     ~MachineIdBar();
 
-    // Create the overlay window and embed it onto the taskbar.
+    // Create the overlay window and embed it onto the given taskbar.
+    // hTaskbar: handle of the taskbar window (Shell_TrayWnd or Shell_SecondaryTrayWnd)
+    // taskbarIndex: 0=primary, 1+=secondary (used for Reembed after Explorer restart)
     // Returns true on success.
-    bool Create(HINSTANCE hInstance);
+    bool Create(HINSTANCE hInstance, HWND hTaskbar, int taskbarIndex = 0);
 
     // Destroy the overlay and restore the taskbar to its original state.
     void Destroy();
@@ -180,7 +182,7 @@ private:
     // --- Window creation & embedding ---
     bool RegisterWindowClass();
     bool CreateWindow_();
-    bool FindTaskbarHandle();
+    bool FindTaskbarHandle();       // re-find taskbar by m_taskbar_index (for Reembed)
     bool DetectTaskbarType();
     bool InitTaskbarWnd();
     bool EmbedOntoTaskbar();
@@ -215,6 +217,7 @@ private:
     HWND        m_hwnd          = nullptr;
     HINSTANCE   m_h_instance    = nullptr;
     HWND        m_h_taskbar     = nullptr;
+    int         m_taskbar_index = 0;   // 0=primary, 1+=secondary (for Reembed)
     HWND        m_h_bar         = nullptr;
     HWND        m_h_min         = nullptr;
     HWND        m_h_notify      = nullptr;
@@ -242,7 +245,4 @@ private:
 
     // --- Registered message ---
     UINT m_wm_taskbar_created   = 0;
-
-    // Static instance pointer for WndProc dispatch
-    static MachineIdBar* s_instance;
 };

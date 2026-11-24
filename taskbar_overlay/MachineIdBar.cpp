@@ -18,9 +18,6 @@
 // Custom message: show the tray menu (posted from overlay right-click)
 #define MIDBAR_WM_SHOW_MENU (WM_USER + 1006)
 
-// Static instance pointer for WndProc dispatch
-MachineIdBar* MachineIdBar::s_instance = nullptr;
-
 // Debug logging
 static void DebugLog(const wchar_t* fmt, ...)
 {
@@ -43,25 +40,24 @@ static bool RectEqual(const RECT& a, const RECT& b)
 
 MachineIdBar::MachineIdBar()
 {
-    s_instance = this;
     m_wm_taskbar_created = RegisterWindowMessage(L"TaskbarCreated");
 }
 
 MachineIdBar::~MachineIdBar()
 {
     Destroy();
-    if (s_instance == this)
-        s_instance = nullptr;
 }
 
 // ============================================================================
 // Public API
 // ============================================================================
 
-bool MachineIdBar::Create(HINSTANCE hInstance)
+bool MachineIdBar::Create(HINSTANCE hInstance, HWND hTaskbar, int taskbarIndex)
 {
     m_h_instance = hInstance;
-    DebugLog(L"=== Create() started ===");
+    m_h_taskbar = hTaskbar;
+    m_taskbar_index = taskbarIndex;
+    DebugLog(L"=== Create() started (taskbar %d, hwnd=%p) ===", taskbarIndex, hTaskbar);
 
     if (!RegisterWindowClass())
     {
@@ -77,12 +73,13 @@ bool MachineIdBar::Create(HINSTANCE hInstance)
     }
     DebugLog(L"CreateWindow_ OK, hwnd=%p", m_hwnd);
 
-    if (!FindTaskbarHandle())
+    // m_h_taskbar is set by caller — no FindTaskbarHandle() needed
+    if (!m_h_taskbar)
     {
-        DebugLog(L"ERROR: FindTaskbarHandle failed (GetLastError=%lu)", GetLastError());
+        DebugLog(L"ERROR: no taskbar HWND provided");
         return false;
     }
-    DebugLog(L"FindTaskbarHandle OK, m_h_taskbar=%p", m_h_taskbar);
+    DebugLog(L"Taskbar HWND OK, m_h_taskbar=%p", m_h_taskbar);
 
     if (!DetectTaskbarType())
     {
@@ -201,6 +198,8 @@ bool MachineIdBar::RegisterWindowClass()
     wc.style         = CS_HREDRAW | CS_VREDRAW;
 
     ATOM atom = RegisterClassEx(&wc);
+    if (atom == 0 && GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
+        return true;  // class was registered by a previous overlay instance
     return atom != 0;
 }
 
@@ -218,7 +217,7 @@ bool MachineIdBar::CreateWindow_()
         MACHINE_ID_BAR_WINDOW_NAME,
         style,
         0, 0, 200, 32,
-        nullptr, nullptr, m_h_instance, nullptr);
+        nullptr, nullptr, m_h_instance, this);  // pass 'this' via lpParam
 
     if (!m_hwnd)
         return false;
@@ -233,11 +232,36 @@ bool MachineIdBar::CreateWindow_()
 
 bool MachineIdBar::FindTaskbarHandle()
 {
-    // Primary monitor: Shell_TrayWnd
-    // Multi-monitor secondary: Shell_SecondaryTrayWnd
-    m_h_taskbar = ::FindWindow(L"Shell_TrayWnd", nullptr);
-    if (!m_h_taskbar)
-        m_h_taskbar = ::FindWindow(L"Shell_SecondaryTrayWnd", nullptr);
+    // Re-find taskbar by index (called from Reembed after Explorer restart).
+    // Index 0 = Shell_TrayWnd (primary), 1+ = Shell_SecondaryTrayWnd (secondary).
+    if (m_taskbar_index == 0)
+    {
+        m_h_taskbar = ::FindWindow(L"Shell_TrayWnd", nullptr);
+    }
+    else
+    {
+        // Enumerate secondary taskbars and pick by index
+        m_h_taskbar = nullptr;
+        struct EnumData { int target; int current; HWND result; };
+        EnumData data = { m_taskbar_index, 0, nullptr };
+        ::EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL
+        {
+            wchar_t cls[256] = {};
+            GetClassNameW(hwnd, cls, 256);
+            if (wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0)
+            {
+                auto* d = reinterpret_cast<EnumData*>(lParam);
+                d->current++;
+                if (d->current == d->target)
+                {
+                    d->result = hwnd;
+                    return FALSE;
+                }
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&data));
+        m_h_taskbar = data.result;
+    }
 
     return m_h_taskbar != nullptr;
 }
@@ -821,7 +845,8 @@ int MachineIdBar::GetDPI()
 
 LRESULT CALLBACK MachineIdBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    MachineIdBar* self = s_instance;
+    // Retrieve the MachineIdBar instance from GWLP_USERDATA (set during WM_NCCREATE)
+    MachineIdBar* self = reinterpret_cast<MachineIdBar*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 
     // Never activate this window when the user clicks it — activating would
     // move keyboard focus away from the app the user is working in.
@@ -829,6 +854,14 @@ LRESULT CALLBACK MachineIdBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     // (click-to-copy and drag keep working).
     if (msg == WM_MOUSEACTIVATE)
         return MA_NOACTIVATE;
+
+    // Handle WM_NCCREATE to capture the 'this' pointer passed via lpParam
+    if (msg == WM_NCCREATE)
+    {
+        CREATESTRUCT* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
+        self = reinterpret_cast<MachineIdBar*>(cs->lpCreateParams);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+    }
 
     // Handle registered TaskbarCreated message
     if (self && msg == self->m_wm_taskbar_created)

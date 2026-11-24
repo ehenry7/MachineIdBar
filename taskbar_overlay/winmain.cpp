@@ -22,6 +22,7 @@
 #include <tlhelp32.h>
 #include <shlobj.h>
 #include <string>
+#include <vector>
 #include <cstdio>
 
 #ifdef _MSC_VER
@@ -35,7 +36,7 @@
 static HINSTANCE      g_hInstance    = nullptr;
 static HWND           g_hHiddenWnd   = nullptr;
 static NOTIFYICONDATA g_nid          = {};
-static MachineIdBar* g_overlay     = nullptr;
+static std::vector<MachineIdBar*> g_overlays;
 static OverlaySettings g_settings;
 
 // Font color presets
@@ -245,6 +246,37 @@ static std::wstring GetDisplayText(const OverlaySettings& s)
         text += GetLocalIP();
     }
     return text;
+}
+
+// ============================================================================
+// Multi-monitor taskbar enumeration
+// ============================================================================
+
+struct TaskbarInfo { HWND hwnd; int index; };  // 0=primary, 1+=secondary
+
+static std::vector<TaskbarInfo> FindAllTaskbars()
+{
+    std::vector<TaskbarInfo> taskbars;
+
+    // Primary taskbar
+    HWND primary = ::FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (primary)
+        taskbars.push_back({ primary, 0 });
+
+    // Secondary taskbars (Shell_SecondaryTrayWnd)
+    ::EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL
+    {
+        wchar_t cls[256] = {};
+        GetClassNameW(hwnd, cls, 256);
+        if (wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0)
+        {
+            auto* list = reinterpret_cast<std::vector<TaskbarInfo>*>(lParam);
+            list->push_back({ hwnd, (int)list->size() });  // index = position in list (0=primary already added)
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&taskbars));
+
+    return taskbars;
 }
 
 // ============================================================================
@@ -466,6 +498,7 @@ static void ShowHelp()
     wprintf(L"                                      (use with -i or -u)\n");
     wprintf(L"  MachineIdBar.exe -l  / --label \"X\" Override label\n");
     wprintf(L"  MachineIdBar.exe -c  / --fg \"#fff\" Override font color\n");
+    wprintf(L"  MachineIdBar.exe --primary-only       Show on primary monitor only\n");
     wprintf(L"\n");
     wprintf(L"Settings are stored in registry (HKCU\\Software\\MachineIdBar)\n");
     wprintf(L"and can be changed via the tray icon right-click menu.\n");
@@ -621,10 +654,11 @@ static void ApplySettingsToOverlay()
     style.font_size  = g_settings.font_size;
     style.font_name  = L"Segoe UI";
 
-    if (g_overlay)
+    std::wstring text = GetDisplayText(g_settings);
+    for (auto* overlay : g_overlays)
     {
-        g_overlay->SetStyle(style);
-        g_overlay->SetText(GetDisplayText(g_settings));
+        overlay->SetStyle(style);
+        overlay->SetText(text);
     }
 }
 
@@ -802,8 +836,8 @@ static HWND CreateHiddenWindow(HINSTANCE hInstance)
             {
                 g_settings.position = TaskbarPosition::Left;
                 SaveAndUpdate();
-                if (g_overlay)
-                    g_overlay->SetPosition(g_settings.position);
+                for (auto* ov : g_overlays)
+                    ov->SetPosition(g_settings.position);
                 return 0;
             }
 
@@ -811,8 +845,8 @@ static HWND CreateHiddenWindow(HINSTANCE hInstance)
             {
                 g_settings.position = TaskbarPosition::Right;
                 SaveAndUpdate();
-                if (g_overlay)
-                    g_overlay->SetPosition(g_settings.position);
+                for (auto* ov : g_overlays)
+                    ov->SetPosition(g_settings.position);
                 return 0;
             }
 
@@ -924,6 +958,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
     // This ensures -n is seen even when it appears after -i or -u.
     bool guiMode = false;
     bool noArp = false;
+    bool primaryOnly = false;
     int action = 0;  // 0=none, 1=install, 2=uninstall, 3=help
     if (argv)
     {
@@ -935,6 +970,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
                 guiMode = true;
             else if (arg == L"--no-arp" || arg == L"-n")
                 noArp = true;
+            else if (arg == L"--primary-only")
+                primaryOnly = true;
         }
         // Pass 2: dispatch first action found
         for (int i = 1; i < argc && action == 0; i++)
@@ -1016,6 +1053,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
         PROCESS_INFORMATION pi = {};
 
         std::wstring cmd = std::wstring(exePath) + L" --gui";
+        if (primaryOnly)
+            cmd += L" --primary-only";
 
         if (CreateProcessW(nullptr, const_cast<LPWSTR>(cmd.c_str()),
                            nullptr, nullptr, FALSE,
@@ -1050,9 +1089,23 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
     AddTrayIcon(g_hHiddenWnd);
     WinMainLog(L"Tray icon added");
 
-    // Create and embed the taskbar overlay
-    MachineIdBar overlay;
-    g_overlay = &overlay;
+    // Create and embed one taskbar overlay per monitor (or primary only)
+    auto taskbars = FindAllTaskbars();
+    if (primaryOnly && taskbars.size() > 1)
+    {
+        WinMainLog(L"--primary-only: keeping only primary taskbar (%d -> 1)", (int)taskbars.size());
+        taskbars.resize(1);
+    }
+    WinMainLog(L"Found %d taskbar(s)", (int)taskbars.size());
+
+    if (taskbars.empty())
+    {
+        WinMainLog(L"ERROR: no taskbar found");
+        MessageBox(nullptr, L"Failed to find any taskbar", L"Error", MB_ICONERROR);
+        RemoveTrayIcon();
+        if (hMutex) CloseHandle(hMutex);
+        return 1;
+    }
 
     OverlayStyle style;
     style.text_color = g_settings.text_color;
@@ -1060,22 +1113,39 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
     style.bold       = g_settings.bold;
     style.font_size  = g_settings.font_size;
     style.font_name  = L"Segoe UI";
-    overlay.SetStyle(style);
-    overlay.SetPosition(g_settings.position);
 
-    if (!overlay.Create(hInstance))
+    std::wstring text = GetDisplayText(g_settings);
+    WinMainLog(L"Display text: %ls", text.c_str());
+
+    bool anyCreated = false;
+    for (const auto& tb : taskbars)
     {
-        WinMainLog(L"ERROR: overlay.Create() failed");
+        auto* overlay = new MachineIdBar();
+        overlay->SetStyle(style);
+        overlay->SetPosition(g_settings.position);
+
+        if (overlay->Create(hInstance, tb.hwnd, tb.index))
+        {
+            overlay->SetText(text);
+            g_overlays.push_back(overlay);
+            anyCreated = true;
+            WinMainLog(L"Overlay %d created OK (taskbar hwnd=%p)", tb.index, tb.hwnd);
+        }
+        else
+        {
+            WinMainLog(L"ERROR: overlay %d Create() failed (taskbar hwnd=%p)", tb.index, tb.hwnd);
+            delete overlay;
+        }
+    }
+
+    if (!anyCreated)
+    {
+        WinMainLog(L"ERROR: no overlay could be created");
         MessageBox(nullptr, L"Failed to create taskbar overlay", L"Error", MB_ICONERROR);
         RemoveTrayIcon();
         if (hMutex) CloseHandle(hMutex);
         return 1;
     }
-    WinMainLog(L"overlay.Create() OK");
-
-    std::wstring text = GetDisplayText(g_settings);
-    WinMainLog(L"Display text: %ls", text.c_str());
-    overlay.SetText(text);
 
     // Message loop
     MSG msg;
@@ -1086,8 +1156,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int)
     }
 
     WinMainLog(L"Message loop exited");
-    g_overlay = nullptr;
-    overlay.Destroy();
+    for (auto* ov : g_overlays)
+    {
+        ov->Destroy();
+        delete ov;
+    }
+    g_overlays.clear();
     RemoveTrayIcon();
     if (hMutex) CloseHandle(hMutex);
     return (int)msg.wParam;
